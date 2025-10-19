@@ -1,12 +1,18 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import Webcam from 'react-webcam'
 import { Camera, Home, Users, LogOut, Image as Gallery, Heart, Bell } from 'lucide-react'
 
-// ✅ Import the bubble font
+// ✅ Import the bubble font correctly
 import { Bungee } from 'next/font/google'
 const bubbleFont = Bungee({ subsets: ['latin'], weight: '400' })
+
+// ✅ Type definitions
+interface Comment {
+  user: string
+  text: string
+}
 
 interface Post {
   id: number
@@ -15,10 +21,10 @@ interface Post {
   caption: string
   date: string
   likes: string[]
-  comments: { user: string; text: string }[]
+  comments: Comment[]
 }
 
-export default function SweatStreakApp() {
+export default function SweatStreakApp(): JSX.Element {
   const [page, setPage] = useState<'signup' | 'login' | 'app'>('signup')
   const [loggedIn, setLoggedIn] = useState(false)
   const [username, setUsername] = useState('')
@@ -31,13 +37,14 @@ export default function SweatStreakApp() {
   const [showCamera, setShowCamera] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
   const [cameraError, setCameraError] = useState<string | null>(null)
-  const [commentInputs, setCommentInputs] = useState<{ [key: number]: string }>({})
+  const [commentInputs, setCommentInputs] = useState<Record<number, string>>({})
   const [notifications, setNotifications] = useState<string[]>([])
   const [pulse, setPulse] = useState(false)
 
-  const webcamRef = useRef<Webcam>(null)
+  const webcamRef = useRef<Webcam | null>(null)
   const todayISO = new Date().toISOString().split('T')[0]
 
+  // ✅ Load user session
   useEffect(() => {
     const savedUser = localStorage.getItem('sweatstreak_user')
     if (savedUser) {
@@ -47,14 +54,15 @@ export default function SweatStreakApp() {
     }
   }, [])
 
+  // ✅ Load posts and friends when logged in
   useEffect(() => {
     if (loggedIn) {
-      const allPosts = JSON.parse(localStorage.getItem('sweatstreak_posts') || '[]').map((p: any) => ({
+      const allPosts: Post[] = JSON.parse(localStorage.getItem('sweatstreak_posts') || '[]').map((p: any) => ({
         ...p,
         likes: Array.isArray(p.likes) ? p.likes : [],
         comments: Array.isArray(p.comments) ? p.comments : [],
       }))
-      const userFriends = JSON.parse(localStorage.getItem(`friends_${username}`) || '[]')
+      const userFriends: string[] = JSON.parse(localStorage.getItem(`friends_${username}`) || '[]')
       setPosts(allPosts)
       setFriends(userFriends)
     }
@@ -66,9 +74,9 @@ export default function SweatStreakApp() {
   }
 
   // --- AUTH ---
-  function handleSignup() {
+  function handleSignup(): void {
     if (!inputUser || !inputPass) return alert('Please fill in both fields.')
-    const users = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+    const users: Record<string, string> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
     if (users[inputUser]) return alert('Username already taken.')
     users[inputUser] = inputPass
     localStorage.setItem('sweatstreak_accounts', JSON.stringify(users))
@@ -76,8 +84,8 @@ export default function SweatStreakApp() {
     setPage('login')
   }
 
-  function handleLogin() {
-    const users = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+  function handleLogin(): void {
+    const users: Record<string, string> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
     if (users[inputUser] === inputPass) {
       setUsername(inputUser)
       setLoggedIn(true)
@@ -86,7 +94,7 @@ export default function SweatStreakApp() {
     } else alert('Invalid username or password.')
   }
 
-  function handleLogout() {
+  function handleLogout(): void {
     localStorage.removeItem('sweatstreak_user')
     setLoggedIn(false)
     setUsername('')
@@ -94,21 +102,25 @@ export default function SweatStreakApp() {
   }
 
   // --- CAMERA ---
-  function openCamera() {
+  function openCamera(): void {
     setCameraError(null)
     setPreview(null)
     setShowCamera(true)
   }
 
-  function capturePhoto() {
+  function capturePhoto(): void {
     if (webcamRef.current) {
       const imageSrc = webcamRef.current.getScreenshot()
-      setPreview(imageSrc)
-      setShowCamera(false)
+      if (imageSrc) {
+        setPreview(imageSrc)
+        setShowCamera(false)
+      } else {
+        setCameraError('Failed to capture photo.')
+      }
     }
   }
 
-  function confirmPhoto() {
+  function confirmPhoto(): void {
     if (!preview) return
     const hasPostedToday = posts.some(p => p.user === username && p.date === todayISO)
     if (hasPostedToday) {
@@ -133,7 +145,7 @@ export default function SweatStreakApp() {
     savePosts(updated)
 
     friends.forEach(friend => {
-      const friendNotifications = JSON.parse(localStorage.getItem(`notifications_${friend}`) || '[]')
+      const friendNotifications: string[] = JSON.parse(localStorage.getItem(`notifications_${friend}`) || '[]')
       friendNotifications.push(`${username} just posted their SweatStreak! 🔥`)
       localStorage.setItem(`notifications_${friend}`, JSON.stringify(friendNotifications))
     })
@@ -144,9 +156,9 @@ export default function SweatStreakApp() {
   }
 
   // --- FRIENDS ---
-  function handleAddFriend() {
+  function handleAddFriend(): void {
     if (!friendInput.trim()) return alert('Enter a username to add.')
-    const users = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+    const users: Record<string, string> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
     if (!users[friendInput]) return alert('That user doesn’t exist.')
     if (friends.includes(friendInput)) return alert('Already added.')
     const newFriends = [...friends, friendInput]
@@ -159,7 +171,7 @@ export default function SweatStreakApp() {
   // --- NOTIFICATIONS ---
   useEffect(() => {
     if (loggedIn) {
-      const userNotifications = JSON.parse(localStorage.getItem(`notifications_${username}`) || '[]')
+      const userNotifications: string[] = JSON.parse(localStorage.getItem(`notifications_${username}`) || '[]')
       if (userNotifications.length > 0) {
         setNotifications(userNotifications)
         setPulse(true)
@@ -167,10 +179,10 @@ export default function SweatStreakApp() {
         localStorage.setItem(`notifications_${username}`, JSON.stringify([]))
       }
     }
-  }, [posts, loggedIn])
+  }, [posts, loggedIn, username])
 
   // --- INTERACTIONS ---
-  function toggleLike(postId: number) {
+  function toggleLike(postId: number): void {
     const updated = posts.map(p =>
       p.id === postId
         ? {
@@ -184,7 +196,7 @@ export default function SweatStreakApp() {
     savePosts(updated)
   }
 
-  function addComment(postId: number) {
+  function addComment(postId: number): void {
     const text = commentInputs[postId]
     if (!text?.trim()) return
     const updated = posts.map(p =>
@@ -199,7 +211,7 @@ export default function SweatStreakApp() {
   // --- LOGIN / SIGNUP SCREENS ---
   if (!loggedIn && page === 'signup') {
     return (
-      <div className="flex items-center justify-center min-h-screen" style={{ backgroundColor: '#3A47FF', color: 'white' }}>
+      <div className="flex items-center justify-center min-h-screen bg-[#3A47FF] text-white">
         <div className="bg-white p-10 rounded-xl w-full max-w-sm text-center shadow-lg border border-white text-black">
           <h1 className={`${bubbleFont.className} text-4xl mb-6 text-black`}>SweatStreak</h1>
           <input placeholder="Username" value={inputUser} onChange={e => setInputUser(e.target.value)} className="w-full mb-3 p-2 rounded border border-gray-300" />
@@ -213,7 +225,7 @@ export default function SweatStreakApp() {
 
   if (!loggedIn && page === 'login') {
     return (
-      <div className="flex items-center justify-center min-h-screen" style={{ backgroundColor: '#3A47FF', color: 'white' }}>
+      <div className="flex items-center justify-center min-h-screen bg-[#3A47FF] text-white">
         <div className="bg-white p-10 rounded-xl w-full max-w-sm text-center shadow-lg border border-white text-black">
           <h1 className={`${bubbleFont.className} text-4xl mb-6 text-black`}>SweatStreak</h1>
           <input placeholder="Username" value={inputUser} onChange={e => setInputUser(e.target.value)} className="w-full mb-3 p-2 rounded border border-gray-300" />
@@ -229,9 +241,9 @@ export default function SweatStreakApp() {
   const feedPosts = posts.filter(p => p.user === username || friends.includes(p.user))
 
   return (
-    <div className="flex min-h-screen text-white" style={{ backgroundColor: '#3A47FF' }}>
+    <div className="flex min-h-screen text-white bg-[#3A47FF]">
       {/* Sidebar */}
-      <aside className="w-60 bg-[#3A47FF] flex flex-col p-5 border-r border-white shadow-md">
+      <aside className="w-60 flex flex-col p-5 border-r border-white shadow-md">
         <h1 className={`${bubbleFont.className} text-2xl mb-6 text-white`}>SweatStreak</h1>
         <p className="text-sm mb-8">@{username}</p>
         <nav className="flex flex-col gap-3 flex-1">
@@ -245,6 +257,7 @@ export default function SweatStreakApp() {
 
       {/* Main Content */}
       <main className="flex-1 p-8 overflow-y-auto">
+        {/* Camera */}
         {view === 'camera' && (
           <section className="text-center">
             <h2 className={`${bubbleFont.className} text-3xl mb-4 text-white`}>Take Your Daily Photo</h2>
@@ -277,6 +290,7 @@ export default function SweatStreakApp() {
           </section>
         )}
 
+        {/* Feed */}
         {view === 'feed' && (
           <section>
             <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>Friends Feed</h2>
@@ -315,6 +329,7 @@ export default function SweatStreakApp() {
           </section>
         )}
 
+        {/* Friends */}
         {view === 'friends' && (
           <section>
             <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>Friends</h2>
@@ -339,6 +354,7 @@ export default function SweatStreakApp() {
           </section>
         )}
 
+        {/* Progress */}
         {view === 'progress' && (
           <section>
             <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>My Progress</h2>
