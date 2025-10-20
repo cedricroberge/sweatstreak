@@ -14,8 +14,9 @@ workflows:
           npm install
       - name: Build Next.js app
         script: |
-          npm run build
-          npx cap copy
+           npx --yes @capacitor/cli copy
+           npm run build
+           npx cap copy
       - name: Prepare iOS project
         script: |
           npx cap sync ios
