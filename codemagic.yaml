@@ -28,4 +28,4 @@ workflows:
     publishing:
       email:
         recipients:
-          - $CM_EMAIL
+          - cedricroberge10@gmail.com
