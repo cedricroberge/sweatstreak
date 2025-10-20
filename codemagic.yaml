@@ -7,7 +7,7 @@ workflows:
     environment:
       vars:
         NODE_VERSION: 20
-        xcode: 15.0
+        XCODE_VERSION: 15.0
 
     scripts:
       - name: Install dependencies
@@ -18,21 +18,23 @@ workflows:
         script: |
           npm install -g @capacitor/cli
           npm run build
-          npx cap copy
-
-      - name: Prepare iOS project
-        script: |
           npx cap sync ios
 
       - name: Build iOS app
         script: |
           cd ios/App
-          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphoneos -derivedDataPath build
+          xcodebuild \
+            -workspace App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build
 
     artifacts:
-      - ios/App/build/**/*.ipa
+      - ios/App/build/Build/Products/Release-iphoneos/*.app
+      - ios/App/build/Build/Products/Release-iphoneos/*.ipa
 
     publishing:
       email:
         recipients:
-          - cedricroberge@gmail.com
+          - your@email.com  # 👈 replace this with your actual email
