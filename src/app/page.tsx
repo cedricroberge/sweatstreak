@@ -12,7 +12,12 @@ import {
   RefreshCw,
   Menu,
   User,
-  ArrowLeft
+  ArrowLeft,
+  Settings as SettingsIcon,
+  Mail,
+  Shield,
+  Bell,
+  EyeOff
 } from 'lucide-react'
 import { Bungee } from 'next/font/google'
 
@@ -41,6 +46,9 @@ interface Account {
   password: string
   bio?: string
   profilePic?: string
+  location?: string
+  isPrivate?: boolean
+  notificationsEnabled?: boolean
 }
 
 export default function SweatStreakApp() {
@@ -50,9 +58,11 @@ export default function SweatStreakApp() {
   const [inputUser, setInputUser] = useState('')
   const [inputPass, setInputPass] = useState('')
   const [inputEmail, setInputEmail] = useState('')
-  const [view, setView] = useState<'feed' | 'camera' | 'friends' | 'progress' | 'profile' | 'friendProfile'>('camera')
+  const [view, setView] = useState<
+    'feed' | 'camera' | 'friends' | 'progress' | 'profile' | 'friendProfile' | 'settings' | 'followersList' | 'followingList'
+  >('camera')
   const [posts, setPosts] = useState<Post[]>([])
-  const [friends, setFriends] = useState<string[]>([])
+  const [friends, setFriends] = useState<string[]>([]) // legacy, kept
   const [friendInput, setFriendInput] = useState('')
   const [showCamera, setShowCamera] = useState(false)
   const [fullscreenCam, setFullscreenCam] = useState(false)
@@ -74,10 +84,45 @@ export default function SweatStreakApp() {
   const webcamRef = useRef<Webcam | null>(null)
   const todayISO = new Date().toISOString().split('T')[0]
 
-  // 🆕 helpers (additions only)
+  // 🆕 profile/settings additions
+  const [profileLocation, setProfileLocation] = useState('')
+  const [accountPrivate, setAccountPrivate] = useState(false)
+  const [notifEnabled, setNotifEnabled] = useState(true)
+
+  // 🆕 following system + UI state
+  const [feedScope, setFeedScope] = useState<'following' | 'public'>('following')
+
+  // 🆕 force re-render after follow/unfollow/block
+  const [socialVersion, setSocialVersion] = useState(0)
+
+  // Helpers
   const getAccounts = (): Record<string, Account> =>
     JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
-  const getUserPic = (u: string): string | undefined => getAccounts()[u]?.profilePic || undefined
+  const setAccounts = (obj: Record<string, Account>) =>
+    localStorage.setItem('sweatstreak_accounts', JSON.stringify(obj))
+
+  const getUserPic = (u: string): string | undefined => {
+    const a = getAccounts()[u]
+    return a?.profilePic || undefined
+  }
+
+  const getFollowing = (u: string): string[] =>
+    JSON.parse(localStorage.getItem(`following_${u}`) || '[]')
+  const setFollowing = (u: string, arr: string[]) => {
+    localStorage.setItem(`following_${u}`, JSON.stringify(arr))
+  }
+
+  const getFollowers = (u: string): string[] =>
+    JSON.parse(localStorage.getItem(`followers_${u}`) || '[]')
+  const setFollowers = (u: string, arr: string[]) => {
+    localStorage.setItem(`followers_${u}`, JSON.stringify(arr))
+  }
+
+  const getBlocked = (u: string): string[] =>
+    JSON.parse(localStorage.getItem(`blocked_${u}`) || '[]')
+  const setBlocked = (u: string, arr: string[]) => {
+    localStorage.setItem(`blocked_${u}`, JSON.stringify(arr))
+  }
 
   // ✅ Load session
   useEffect(() => {
@@ -97,17 +142,20 @@ export default function SweatStreakApp() {
         likes: Array.isArray(p.likes) ? p.likes : [],
         comments: Array.isArray(p.comments) ? p.comments : [],
       }))
-      const userFriends: string[] = JSON.parse(localStorage.getItem(`friends_${username}`) || '[]')
+      const userFriends: string[] = JSON.parse(localStorage.getItem(`friends_${username}`) || '[]') // legacy
       setPosts(allPosts)
       setFriends(userFriends)
-      const users: Record<string, Account> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+      const users: Record<string, Account> = getAccounts()
       const me = users[username]
       if (me) {
         setProfileBio(me.bio || '')
         setProfilePic(me.profilePic || null)
+        setProfileLocation(me.location || '')
+        setAccountPrivate(!!me.isPrivate)
+        setNotifEnabled(me.notificationsEnabled !== false)
       }
     }
-  }, [loggedIn, username])
+  }, [loggedIn, username, socialVersion])
 
   function savePosts(newPosts: Post[]) {
     setPosts(newPosts)
@@ -124,7 +172,7 @@ export default function SweatStreakApp() {
       return alert('Please fill in all fields.')
     if (!isValidPassword(inputPass))
       return alert('Password must be at least 8 characters, include a capital letter, and one number.')
-    const users: Record<string, Account> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+    const users: Record<string, Account> = getAccounts()
     if (Object.values(users).some(u => u.username === inputUser || u.email === inputEmail))
       return alert('Email or username already taken.')
     users[inputUser] = {
@@ -132,9 +180,12 @@ export default function SweatStreakApp() {
       username: inputUser,
       password: inputPass,
       bio: '',
-      profilePic: ''
+      profilePic: '',
+      location: '',
+      isPrivate: false,
+      notificationsEnabled: true,
     }
-    localStorage.setItem('sweatstreak_accounts', JSON.stringify(users))
+    setAccounts(users)
     localStorage.setItem('sweatstreak_user', inputUser)
     setUsername(inputUser)
     setLoggedIn(true)
@@ -143,7 +194,7 @@ export default function SweatStreakApp() {
   }
 
   function handleLogin(): void {
-    const users: Record<string, Account> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+    const users: Record<string, Account> = getAccounts()
     const foundUser = Object.values(users).find(
       u => (u.username === inputUser || u.email === inputUser) && u.password === inputPass
     )
@@ -209,6 +260,20 @@ export default function SweatStreakApp() {
     }
     const updated = [newPost, ...posts]
     savePosts(updated)
+
+    // Notify followers that I posted
+    const followers = getFollowers(username)
+    const users = getAccounts()
+    followers.forEach(f => {
+      const followerSettings = users[f]
+      if (followerSettings?.notificationsEnabled !== false) {
+        const n: string[] = JSON.parse(localStorage.getItem(`notifications_${f}`) || '[]')
+        n.push(`${username} just posted their SweatStreak! 🔥`)
+        localStorage.setItem(`notifications_${f}`, JSON.stringify(n))
+      }
+    })
+
+    // keep legacy friend notifications
     if (visibility === 'public') {
       friends.forEach(friend => {
         const friendNotifications: string[] = JSON.parse(localStorage.getItem(`notifications_${friend}`) || '[]')
@@ -216,16 +281,17 @@ export default function SweatStreakApp() {
         localStorage.setItem(`notifications_${friend}`, JSON.stringify(friendNotifications))
       })
     }
+
     setPreview(null)
     setCaption('')
     setShowCamera(false)
     setView('feed')
   }
 
-  // --- FRIENDS ---
+  // --- FRIENDS (legacy kept) + FOLLOWING (new) ---
   function handleAddFriend(): void {
     if (!friendInput.trim()) return alert('Enter a username to add.')
-    const users: Record<string, Account> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+    const users: Record<string, Account> = getAccounts()
     if (!users[friendInput]) return alert('That user doesn’t exist.')
     if (friends.includes(friendInput)) return alert('Already added.')
     const newFriends = [...friends, friendInput]
@@ -236,7 +302,7 @@ export default function SweatStreakApp() {
   }
 
   function previewFriend(): void {
-    const users: Record<string, Account> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+    const users: Record<string, Account> = getAccounts()
     const found = users[friendInput]
     if (found) setFriendPreview(found)
     else setFriendPreview(null)
@@ -247,16 +313,44 @@ export default function SweatStreakApp() {
     setView('friendProfile')
   }
 
+  // 🆕 FOLLOW/UNFOLLOW (force refresh with socialVersion)
+  function followUser(target: string) {
+    if (!target || target === username) return
+    const users = getAccounts()
+    if (!users[target]) return alert('User not found.')
+    const myFollowing = getFollowing(username)
+    if (myFollowing.includes(target)) return alert('Already following.')
+    setFollowing(username, [...myFollowing, target])
+    const theirFollowers = getFollowers(target)
+    setFollowers(target, [...theirFollowers, username])
+    setSocialVersion(v => v + 1)
+    alert(`✅ You are now following @${target}`)
+  }
+
+  function unfollowUser(target: string) {
+    if (!target || target === username) return
+    const myFollowing = getFollowing(username)
+    setFollowing(username, myFollowing.filter(u => u !== target))
+    const theirFollowers = getFollowers(target)
+    setFollowers(target, theirFollowers.filter(u => u !== username))
+    setSocialVersion(v => v + 1)
+    alert(`👋 Unfollowed @${target}`)
+  }
+
   // --- PROFILE ---
   function saveProfileChanges() {
-    const users: Record<string, Account> = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+    const users: Record<string, Account> = getAccounts()
     if (users[username]) {
       users[username] = {
         ...users[username],
         bio: profileBio,
         profilePic: profilePic || '',
+        location: profileLocation || '',
+        isPrivate: accountPrivate,
+        notificationsEnabled: notifEnabled,
       }
-      localStorage.setItem('sweatstreak_accounts', JSON.stringify(users))
+      setAccounts(users)
+      setSocialVersion(v => v + 1)
       alert('✅ Profile updated!')
       setEditingProfile(false)
     }
@@ -308,7 +402,7 @@ export default function SweatStreakApp() {
     setCommentInputs({ ...commentInputs, [postId]: '' })
   }
 
-  // 🆕 Safety: ensure the camera overlay never blocks the sidebar
+  // Safety: camera overlay vs menu
   useEffect(() => {
     if (menuOpen) setFullscreenCam(false)
   }, [menuOpen])
@@ -401,41 +495,78 @@ export default function SweatStreakApp() {
     (p) =>
       (p.user === username || friends.includes(p.user)) &&
       (p.visibility === 'public' || p.user === username)
-  ); // IMPORTANT: terminate this
+  ); // keep legacy feed calc
+
+  // 🆕 Derived feeds
+  const myFollowing = getFollowing(username)
+  const myBlocked = getBlocked(username)
+  const usersMap = getAccounts()
+
+  const derivedFollowingFeed = posts.filter(p => {
+    if (myBlocked.includes(p.user)) return false
+    if (p.user === username) return true
+    const acct = usersMap[p.user]
+    const isPrivate = acct?.isPrivate
+    const isFollowed = myFollowing.includes(p.user)
+    if (isPrivate) return isFollowed
+    return isFollowed
+  })
+
+  const derivedPublicFeed = posts.filter(p => {
+    if (myBlocked.includes(p.user)) return false
+    const acct = usersMap[p.user]
+    const isPrivate = acct?.isPrivate
+    if (isPrivate) return false
+    return p.visibility === 'public'
+  })
+
+  const tabFeed = feedScope === 'following' ? derivedFollowingFeed : derivedPublicFeed
+
+  // counts
+  const followersCount = getFollowers(username).length
+  const followingCount = myFollowing.length
+  const myPostsCount = posts.filter(p => p.user === username).length
+
+  // list views
+  const openFollowersList = () => { setView('followersList') }
+  const openFollowingList = () => { setView('followingList') }
 
   return (
     <div className="flex min-h-screen text-white bg-[#3A47FF] relative">
-      {/* 🆕 Global CSS tweaks to keep avatars small without removing your original markup */}
+      {/* Global CSS */}
       <style jsx global>{`
-        /* Make the original big profile <img alt="Profile"> render small */
         img[alt="Profile"] {
           width: 40px !important;
           height: 40px !important;
           object-fit: cover;
         }
-        /* Ensure any tiny avatars we add stay compact */
         .avatar-sm { width: 32px; height: 32px; border-radius: 9999px; object-fit: cover; }
-        .avatar-md { width: 40px; height: 40px; border-radius: 9999px; object-fit: cover; }
-        
-        /* FEED: Hide duplicate username in the second header row (keep the like button) */
-  .flex.items-center.gap-2.mb-2 + .flex.justify-between.items-center.mb-2 > button:first-child {
-    display: none !important;
-  }
+        .avatar-md { width: 56px !important; height: 56px !important; border-radius: 9999px; object-fit: cover; }
 
-  /* PROFILE: Only show the compact row; hide the original big image + name + bio */
-  .text-center > img[alt="Profile"],
-  .text-center > p.text-lg.font-bold,
-  .text-center > p.text-sm.italic.text-gray-200.mb-4 {
-    display: none !important;
-  }
+        /* hide duplicate username in legacy header row (keep like button) */
+        .flex.items-center.gap-2.mb-2 + .flex.justify-between.items-center.mb-2 > button:first-child {
+          display: none !important;
+        }
 
-  /* PROFILE: make the compact profile avatar slightly larger (but still small) */
-  .avatar-md {
-    width: 56px !important;   /* was ~40px */
-    height: 56px !important;
-    border-radius: 9999px;
-    object-fit: cover;
-  }
+        /* hide legacy big trio in profile (we use compact row) */
+        .text-center > img[alt="Profile"],
+        .text-center > p.text-lg.font-bold,
+        .text-center > p.text-sm.italic.text-gray-200.mb-4 {
+          display: none !important;
+        }
+
+        /* hide legacy feed cards to avoid dupes */
+        .shadow-sm.text-left { display: none !important; }
+
+        /* 🔧 make the profile stats row buttons match post cards */
+        .stats-row button {
+          background: rgba(58,71,255,0.5) !important; /* like your post cards */
+          border: 1px solid white !important;
+          border-radius: 0.5rem !important;
+          padding: 0.5rem 1rem !important;
+          color: white !important;
+          min-width: 110px;
+        }
       `}</style>
 
       {/* Hamburger Menu */}
@@ -456,7 +587,7 @@ export default function SweatStreakApp() {
       >
         <h1 className={`${bubbleFont.className} text-xl md:text-2xl mb-4 text-white`}>SweatStreak</h1>
 
-        {/* Small avatar + username row (addition only) */}
+        {/* small avatar + username */}
         <div className="flex items-center gap-2 mb-2">
           {profilePic ? (
             <img src={profilePic} alt="Me" className="avatar-sm border border-white" />
@@ -466,15 +597,17 @@ export default function SweatStreakApp() {
           <span className="text-xs md:text-sm">@{username}</span>
         </div>
 
-        {/* original username line preserved */}
+        {/* original username line (kept) */}
         <p className="text-xs md:text-sm mb-4">@{username}</p>
 
         <nav className="flex flex-col gap-3 flex-1">
           <button onClick={() => { setView('feed'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><Home /> Feed</button>
           <button onClick={() => { setView('camera'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><Camera /> Take Photo</button>
-          <button onClick={() => { setView('friends'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><Users /> Friends</button>
+          {/* renamed label only */}
+          <button onClick={() => { setView('friends'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><Users /> Following</button>
           <button onClick={() => { setView('progress'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><Gallery /> My Progress</button>
           <button onClick={() => { setView('profile'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><User /> Profile</button>
+          <button onClick={() => { setView('settings'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><SettingsIcon /> Settings</button>
         </nav>
         <button onClick={handleLogout} className="flex items-center gap-2 text-white hover:text-gray-200 mt-4"><LogOut /> Logout</button>
       </aside>
@@ -501,7 +634,6 @@ export default function SweatStreakApp() {
               <button onClick={toggleCamera} className="bg-white text-black px-6 py-2 rounded-md font-bold flex items-center gap-2">
                 <RefreshCw size={16} /> Flip
               </button>
-              {/* “Take Picture” button added (keeps original dot if you want both) */}
               <button onClick={capturePhoto} className="bg-red-500 text-white px-6 py-2 rounded-md font-bold text-lg">
                 Take Picture
               </button>
@@ -551,84 +683,94 @@ export default function SweatStreakApp() {
         {/* Feed Section */}
         {view === 'feed' && (
           <section>
-            <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>Friends Feed</h2>
-            {feedPosts.length === 0 ? (
+            <h2 className={`${bubbleFont.className} text-3xl mb-2 text-white`}>Feed</h2>
+
+            {/* Tabs: Following / Public */}
+            <div className="flex items-center justify-center gap-4 mb-6">
+              <button
+                className={`px-4 py-2 rounded-full font-bold border ${feedScope === 'following' ? 'bg-white text-black' : 'bg-transparent border-white'}`}
+                onClick={() => setFeedScope('following')}
+              >
+                Following
+              </button>
+              <button
+                className={`px-4 py-2 rounded-full font-bold border ${feedScope === 'public' ? 'bg-white text-black' : 'bg-transparent border-white'}`}
+                onClick={() => setFeedScope('public')}
+              >
+                Public
+              </button>
+            </div>
+
+            {tabFeed.length === 0 ? (
               <p>No posts yet.</p>
             ) : (
-              feedPosts.map(post => (
-                <div key={post.id} className="bg-[#3A47FF]/50 p-4 rounded-lg mb-5 border border-white shadow-sm text-left">
-                  <img src={post.image} alt={post.caption} className="rounded-lg mb-3 w-full object-cover border border-white" />
+              <div className="space-y-5">
+                {tabFeed.map(post => (
+                  <div key={post.id} className="bg-[#3A47FF]/50 p-4 rounded-lg border border-white shadow-sm">
+                    <div className="flex items-center gap-2 mb-3">
+                      {getUserPic(post.user) ? (
+                        <img src={getUserPic(post.user)} alt={post.user} className="avatar-sm border border-white" />
+                      ) : (
+                        <div className="avatar-sm border border-white flex items-center justify-center text-xs">👤</div>
+                      )}
+                      <button
+                        onClick={() => {
+                          const users = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+                          if (users[post.user]) openFriendProfile(users[post.user])
+                        }}
+                        className="font-semibold underline"
+                      >
+                        @{post.user}
+                      </button>
+                      <span className="ml-auto text-xs opacity-80">{post.date}</span>
+                    </div>
 
-                  {/* avatar + username row (added) */}
-                  <div className="flex items-center gap-2 mb-2">
-                    {getUserPic(post.user) ? (
-                      <img src={getUserPic(post.user)} alt={post.user} className="avatar-sm border border-white" />
-                    ) : (
-                      <div className="avatar-sm border border-white flex items-center justify-center text-xs">👤</div>
-                    )}
-                    <button
-                      onClick={() => {
-                        const users = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
-                        if (users[post.user]) openFriendProfile(users[post.user])
-                      }}
-                      className="font-semibold text-white underline"
-                    >
-                      @{post.user}
-                    </button>
-                  </div>
+                    <img src={post.image} alt={post.caption} className="rounded-lg mb-3 w-full object-cover border border-white" />
 
-                  {/* original header preserved */}
-                  <div className="flex justify-between items-center mb-2">
-                    <button
-                      onClick={() => {
-                        const users = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
-                        if (users[post.user]) openFriendProfile(users[post.user])
-                      }}
-                      className="font-semibold text-white underline"
-                    >
-                      @{post.user}
-                    </button>
-                    <button onClick={() => toggleLike(post.id)} className="flex items-center gap-1">
-                      <Heart fill={post.likes.includes(username) ? 'red' : 'none'} /> {post.likes.length}
-                    </button>
-                  </div>
-
-                  <p>{post.caption}</p>
-                  <p className="text-xs text-gray-200 mb-2">{post.date}</p>
-                  <div className="mt-2">
-                    {post.comments.map((c, i) => (
-                      <p key={i} className="text-sm text-white">
-                        <strong>@{c.user}:</strong> {c.text}
-                      </p>
-                    ))}
-                    <div className="flex gap-2 mt-2">
-                      <input
-                        type="text"
-                        placeholder="Add comment..."
-                        value={commentInputs[post.id] || ''}
-                        onChange={e => setCommentInputs({ ...commentInputs, [post.id]: e.target.value })}
-                        className="flex-1 p-1 text-black rounded-md border border-white"
-                      />
-                      <button onClick={() => addComment(post.id)} className="bg-white text-black px-3 rounded-md font-bold">
-                        💬
+                    <div className="flex justify-between items-center mb-2">
+                      <p className="font-medium">{post.caption}</p>
+                      <button onClick={() => toggleLike(post.id)} className="flex items-center gap-1">
+                        <Heart fill={post.likes.includes(username) ? 'red' : 'none'} /> {post.likes.length}
                       </button>
                     </div>
+
+                    <div className="mt-2">
+                      {post.comments.map((c, i) => (
+                        <p key={i} className="text-sm">
+                          <strong>@{c.user}:</strong> {c.text}
+                        </p>
+                      ))}
+                      <div className="flex gap-2 mt-2">
+                        <input
+                          type="text"
+                          placeholder="Add comment..."
+                          value={commentInputs[post.id] || ''}
+                          onChange={e => setCommentInputs({ ...commentInputs, [post.id]: e.target.value })}
+                          className="flex-1 p-1 text-black rounded-md border border-white"
+                        />
+                        <button onClick={() => addComment(post.id)} className="bg-white text-black px-3 rounded-md font-bold">
+                          💬
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))
+                ))}
+              </div>
             )}
+
+            {/* legacy list hidden via CSS */}
           </section>
         )}
 
-        {/* Friends Section */}
+        {/* Following Section (renamed UI; legacy 'friends' view kept) */}
         {view === 'friends' && (
           <section>
-            <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>Friends</h2>
+            <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>Following</h2>
             <div className="flex gap-3 mb-4">
               <input
                 value={friendInput}
                 onChange={e => setFriendInput(e.target.value)}
-                placeholder="Enter username"
+                placeholder="Search username"
                 className="p-2 rounded-md text-black flex-1 border border-white"
               />
               <button onClick={previewFriend} className="bg-white text-black px-4 py-2 rounded-md font-bold">
@@ -641,20 +783,34 @@ export default function SweatStreakApp() {
                   <img src={friendPreview.profilePic} className="avatar-md mx-auto mb-2 border border-white" />
                 )}
                 <p className="text-center font-bold">@{friendPreview.username}</p>
+                <div className="text-center text-sm opacity-80 mb-2">
+                  {friendPreview.bio || 'No bio yet.'}{friendPreview.location ? ` — ${friendPreview.location}` : ''}
+                </div>
                 <div className="flex justify-center gap-3 mt-2">
                   <button onClick={() => openFriendProfile(friendPreview)} className="bg-white text-black px-3 py-1 rounded">
                     View Profile
                   </button>
+                  {getFollowing(username).includes(friendPreview.username) ? (
+                    <button onClick={() => unfollowUser(friendPreview.username)} className="bg-black text-white px-3 py-1 rounded">
+                      Unfollow
+                    </button>
+                  ) : (
+                    <button onClick={() => followUser(friendPreview.username)} className="bg-green-500 text-white px-3 py-1 rounded">
+                      Follow
+                    </button>
+                  )}
+                  {/* Legacy add friend (kept) */}
                   {!friends.includes(friendPreview.username) && (
-                    <button onClick={handleAddFriend} className="bg-green-500 text-white px-3 py-1 rounded">
-                      Add Friend
+                    <button onClick={handleAddFriend} className="bg-blue-500 text-white px-3 py-1 rounded">
+                      Add Friend (legacy)
                     </button>
                   )}
                 </div>
               </div>
             )}
+            {/* legacy friends list kept (could represent "people you might follow") */}
             {friends.length === 0 ? (
-              <p>You haven’t added any friends yet.</p>
+              <p>No users yet.</p>
             ) : (
               <ul className="space-y-2">
                 {friends.map(f => (
@@ -698,15 +854,21 @@ export default function SweatStreakApp() {
         {/* Profile Section */}
         {view === 'profile' && (
           <section>
-            <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>My Profile</h2>
+            {/* settings button */}
+            <div className="flex items-center justify-between">
+              <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>My Profile</h2>
+              <button onClick={() => setView('settings')} className="flex items-center gap-2 bg-white text-black px-3 py-1 rounded-md font-bold">
+                <SettingsIcon size={18}/> Settings
+              </button>
+            </div>
+
             {!editingProfile ? (
               <div className="text-center">
-                {/* original image kept but globally forced small via CSS above */}
                 {profilePic && <img src={profilePic} alt="Profile" className="w-24 h-24 rounded-full mx-auto mb-3 border-2 border-white" />}
                 <p className="text-lg font-bold">@{username}</p>
                 <p className="text-sm italic text-gray-200 mb-4">{profileBio || 'No bio yet.'}</p>
 
-                {/* small avatar inline with name + bio */}
+                {/* compact row */}
                 <div className="flex items-center gap-3 justify-center mb-4">
                   {profilePic ? (
                     <img src={profilePic} alt="mini" className="avatar-md border border-white" />
@@ -715,8 +877,26 @@ export default function SweatStreakApp() {
                   )}
                   <div className="text-left">
                     <div className="font-bold">@{username}</div>
-                    <div className="text-xs italic text-gray-200 max-w-xs">{profileBio || 'No bio yet.'}</div>
+                    <div className="text-xs italic text-gray-200 max-w-xs">
+                      {profileBio || 'No bio yet.'}{profileLocation ? ` — ${profileLocation}` : ''}
+                    </div>
                   </div>
+                </div>
+
+                {/* stats row styled like posts */}
+                <div className="stats-row flex items-center justify-center gap-4 mb-4">
+                  <button onClick={openFollowersList} className="text-center">
+                    <div className="text-xl font-bold">{followersCount}</div>
+                    <div className="text-xs opacity-80">Followers</div>
+                  </button>
+                  <button onClick={openFollowingList} className="text-center">
+                    <div className="text-xl font-bold">{followingCount}</div>
+                    <div className="text-xs opacity-80">Following</div>
+                  </button>
+                  <button className="text-center cursor-default">
+                    <div className="text-xl font-bold">{myPostsCount}</div>
+                    <div className="text-xs opacity-80">Posts</div>
+                  </button>
                 </div>
 
                 <button onClick={() => setEditingProfile(true)} className="bg-white text-black px-4 py-2 rounded-md font-bold">Edit Profile</button>
@@ -725,8 +905,24 @@ export default function SweatStreakApp() {
               <div className="max-w-md mx-auto bg-white/10 p-4 rounded-md">
                 <label className="block mb-2 font-bold">Bio:</label>
                 <textarea value={profileBio} onChange={e => setProfileBio(e.target.value)} className="w-full p-2 rounded text-black mb-3" />
+
+                <label className="block mb-2 font-bold">Location (City, State):</label>
+                <input value={profileLocation} onChange={e => setProfileLocation(e.target.value)} className="w-full p-2 rounded text-black mb-3" placeholder="e.g., Eugene, OR" />
+
                 <label className="block mb-2 font-bold">Profile Picture:</label>
                 <input type="file" accept="image/*" onChange={handleProfilePicChange} className="mb-3" />
+
+                <div className="flex items-center gap-4 mb-3">
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={accountPrivate} onChange={e => setAccountPrivate(e.target.checked)} />
+                    Private account
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={notifEnabled} onChange={e => setNotifEnabled(e.target.checked)} />
+                    Notifications
+                  </label>
+                </div>
+
                 <div className="flex justify-center gap-3">
                   <button onClick={saveProfileChanges} className="bg-white text-black px-4 py-2 rounded-md font-bold">Save</button>
                   <button onClick={() => setEditingProfile(false)} className="bg-black text-white px-4 py-2 rounded-md">Cancel</button>
@@ -736,29 +932,88 @@ export default function SweatStreakApp() {
           </section>
         )}
 
-        {/* Friend Profile Page */}
+        {/* Followers / Following Lists */}
+        {view === 'followersList' && (
+          <section>
+            <button onClick={() => setView('profile')} className="mb-4 underline">&larr; Back to Profile</button>
+            <h2 className={`${bubbleFont.className} text-2xl mb-4`}>Followers</h2>
+            <ul className="space-y-2">
+              {getFollowers(username).map(u => (
+                <li key={u} className="bg-white/10 p-3 rounded flex items-center gap-3">
+                  {getUserPic(u) ? <img src={getUserPic(u)} className="avatar-sm border border-white" /> : <div className="avatar-sm border border-white flex items-center justify-center">👤</div>}
+                  <span>@{u}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {view === 'followingList' && (
+          <section>
+            <button onClick={() => setView('profile')} className="mb-4 underline">&larr; Back to Profile</button>
+            <h2 className={`${bubbleFont.className} text-2xl mb-4`}>Following</h2>
+            <ul className="space-y-2">
+              {getFollowing(username).map(u => (
+                <li key={u} className="bg-white/10 p-3 rounded flex items-center gap-3 justify-between">
+                  <div className="flex items-center gap-3">
+                    {getUserPic(u) ? <img src={getUserPic(u)} className="avatar-sm border border-white" /> : <div className="avatar-sm border border-white flex items-center justify-center">👤</div>}
+                    <span>@{u}</span>
+                  </div>
+                  <button onClick={() => unfollowUser(u)} className="text-xs underline">Unfollow</button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {/* Friend (followed user) Profile */}
         {view === 'friendProfile' && activeFriend && (
           <section>
             <button onClick={() => setView('friends')} className="flex items-center gap-2 mb-4"><ArrowLeft /> Back</button>
             <div className="text-center mb-6">
               {activeFriend.profilePic && <img src={activeFriend.profilePic} className="avatar-md mx-auto mb-3 border border-white" />}
               <p className="font-bold text-xl">@{activeFriend.username}</p>
-              <p className="text-sm italic text-gray-200">{activeFriend.bio || 'No bio yet.'}</p>
-              {!friends.includes(activeFriend.username) && (
-                <button
-                  onClick={() => {
-                    setFriendInput(activeFriend.username)
-                    handleAddFriend()
-                  }}
-                  className="mt-3 bg-white text-black px-4 py-2 rounded-md"
-                >
-                  Add Friend
-                </button>
-              )}
+              <p className="text-sm italic text-gray-200">
+                {activeFriend.bio || 'No bio yet.'}{activeFriend.location ? ` — ${activeFriend.location}` : ''}
+              </p>
+
+              <div className="flex items-center justify-center gap-8 mt-3">
+                <div className="text-center">
+                  <div className="text-xl font-bold">{getFollowers(activeFriend.username).length}</div>
+                  <div className="text-xs opacity-80">Followers</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xl font-bold">{getFollowing(activeFriend.username).length}</div>
+                  <div className="text-xs opacity-80">Following</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-xl font-bold">{posts.filter(p => p.user === activeFriend.username && (activeFriend.isPrivate ? getFollowing(username).includes(activeFriend.username) : true)).length}</div>
+                  <div className="text-xs opacity-80">Posts</div>
+                </div>
+              </div>
+
+              <div className="flex justify-center gap-3 mt-3">
+                {getFollowing(username).includes(activeFriend.username) ? (
+                  <button onClick={() => unfollowUser(activeFriend.username)} className="bg-black text-white px-4 py-2 rounded-md">
+                    Unfollow
+                  </button>
+                ) : (
+                  <button onClick={() => followUser(activeFriend.username)} className="bg-green-500 text-white px-4 py-2 rounded-md">
+                    Follow
+                  </button>
+                )}
+              </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               {posts
-                .filter(p => p.user === activeFriend.username && p.visibility !== 'private')
+                .filter(p => {
+                  const isOwner = p.user === activeFriend.username
+                  if (!isOwner) return false
+                  const acct = usersMap[activeFriend.username]
+                  if (acct?.isPrivate && !getFollowing(username).includes(activeFriend.username)) return false
+                  if (p.visibility === 'private' && !getFollowing(username).includes(activeFriend.username)) return false
+                  return true
+                })
                 .map(p => (
                   <div key={p.id} className="bg-[#3A47FF]/50 p-2 rounded-lg border border-white text-center">
                     <img src={p.image} alt={p.caption} className="rounded-lg mb-2 border border-white" />
@@ -768,7 +1023,140 @@ export default function SweatStreakApp() {
             </div>
           </section>
         )}
+
+        {/* Settings */}
+        {view === 'settings' && (
+          <section>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className={`${bubbleFont.className} text-3xl`}>Settings</h2>
+              <button onClick={() => setView('profile')} className="underline">Done</button>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              <div className="bg-white/10 p-4 rounded-md">
+                <div className="flex items-center gap-2 font-bold mb-3"><Bell size={18}/> Notifications</div>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={notifEnabled}
+                    onChange={e => {
+                      setNotifEnabled(e.target.checked)
+                      const accs = getAccounts()
+                      if (accs[username]) {
+                        accs[username].notificationsEnabled = e.target.checked
+                        setAccounts(accs)
+                        setSocialVersion(v => v + 1)
+                      }
+                    }}
+                  />
+                  Enable notifications
+                </label>
+              </div>
+
+              <div className="bg-white/10 p-4 rounded-md">
+                <div className="flex items-center gap-2 font-bold mb-3"><Shield size={18}/> Privacy</div>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={accountPrivate}
+                    onChange={e => {
+                      setAccountPrivate(e.target.checked)
+                      const accs = getAccounts()
+                      if (accs[username]) {
+                        accs[username].isPrivate = e.target.checked
+                        setAccounts(accs)
+                        setSocialVersion(v => v + 1)
+                      }
+                    }}
+                  />
+                  Make my account private (only followers can see my posts)
+                </label>
+              </div>
+
+              <div className="bg-white/10 p-4 rounded-md md:col-span-2">
+                <div className="flex items-center gap-2 font-bold mb-3"><EyeOff size={18}/> Block Users</div>
+                <div className="flex gap-2 mb-3">
+                  <input
+                    className="flex-1 p-2 rounded text-black"
+                    value={friendInput}
+                    onChange={e => setFriendInput(e.target.value)}
+                    placeholder="Enter username to block"
+                  />
+                  <button
+                    className="bg-black px-3 py-2 rounded-md"
+                    onClick={() => {
+                      const target = friendInput.trim()
+                      if (!target) return
+                      const list = getBlocked(username)
+                      if (!list.includes(target)) {
+                        setBlocked(username, [...list, target])
+                        setSocialVersion(v => v + 1)
+                        alert(`🚫 Blocked @${target}`)
+                      }
+                      setFriendInput('')
+                    }}
+                  >
+                    Block
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {getBlocked(username).map(u => (
+                    <span key={u} className="bg-white/20 px-2 py-1 rounded-full text-sm">
+                      @{u}{' '}
+                      <button className="underline ml-1" onClick={() => { setBlocked(username, getBlocked(username).filter(x => x !== u)); setSocialVersion(v => v + 1) }}>
+                        Unblock
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white/10 p-4 rounded-md md:col-span-2">
+                <div className="flex items-center gap-2 font-bold mb-3"><Mail size={18}/> Help</div>
+                <p className="mb-3">
+                  Need support? Email us at{' '}
+                  <a href="mailto:cedricroberge10@gmail.com" className="underline">cedricroberge10@gmail.com</a>
+                </p>
+                <div className="border-t border-white/20 pt-3">
+                  <p className="font-bold mb-2">Apply as an Influencer</p>
+                  {getFollowers(username).length >= 10000 ? (
+                    <InfluencerForm defaultEmail={getAccounts()[username]?.email || ''} defaultUsername={username} />
+                  ) : (
+                    <p>You need at least <strong>10,000 followers</strong> to apply. Current: {getFollowers(username).length.toLocaleString()}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
       </main>
     </div>
+  )
+}
+
+function InfluencerForm({ defaultEmail, defaultUsername }: { defaultEmail: string; defaultUsername: string }) {
+  const [first, setFirst] = useState('')
+  const [last, setLast] = useState('')
+  const [email, setEmail] = useState(defaultEmail)
+  const [job, setJob] = useState('')
+  const [desired, setDesired] = useState(defaultUsername)
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        alert(`✅ Application submitted!\nName: ${first} ${last}\nEmail: ${email}\nJob: ${job}\nDesired: ${desired}`)
+      }}
+      className="grid md:grid-cols-2 gap-3"
+    >
+      <input value={first} onChange={e => setFirst(e.target.value)} placeholder="First name" className="p-2 rounded text-black" required />
+      <input value={last} onChange={e => setLast(e.target.value)} placeholder="Last name" className="p-2 rounded text-black" required />
+      <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email" className="p-2 rounded text-black md:col-span-2" required />
+      <input value={job} onChange={e => setJob(e.target.value)} placeholder="Job" className="p-2 rounded text-black md:col-span-2" />
+      <input value={desired} onChange={e => setDesired(e.target.value)} placeholder="Desired username" className="p-2 rounded text-black md:col-span-2" />
+      <div className="md:col-span-2">
+        <button type="submit" className="bg-white text-black px-4 py-2 rounded-md font-bold">Submit</button>
+      </div>
+    </form>
   )
 }
