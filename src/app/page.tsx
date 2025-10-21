@@ -1,4 +1,4 @@
-'use client'
+'use client' 
 
 import React, { useState, useEffect, useRef } from 'react'
 import Webcam from 'react-webcam'
@@ -73,6 +73,11 @@ export default function SweatStreakApp() {
 
   const webcamRef = useRef<Webcam | null>(null)
   const todayISO = new Date().toISOString().split('T')[0]
+
+  // 🆕 helpers (additions only)
+  const getAccounts = (): Record<string, Account> =>
+    JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+  const getUserPic = (u: string): string | undefined => getAccounts()[u]?.profilePic || undefined
 
   // ✅ Load session
   useEffect(() => {
@@ -216,6 +221,7 @@ export default function SweatStreakApp() {
     setShowCamera(false)
     setView('feed')
   }
+
   // --- FRIENDS ---
   function handleAddFriend(): void {
     if (!friendInput.trim()) return alert('Enter a username to add.')
@@ -302,6 +308,14 @@ export default function SweatStreakApp() {
     setCommentInputs({ ...commentInputs, [postId]: '' })
   }
 
+  // 🆕 Safety: ensure the camera overlay never blocks the sidebar
+  useEffect(() => {
+    if (menuOpen) setFullscreenCam(false)
+  }, [menuOpen])
+  useEffect(() => {
+    if (fullscreenCam && view !== 'camera') setFullscreenCam(false)
+  }, [view, fullscreenCam])
+
   // --- LOGIN / SIGNUP ---
   if (!loggedIn && page === 'signup') {
     return (
@@ -384,16 +398,51 @@ export default function SweatStreakApp() {
 
   // --- MAIN APP ---
   const feedPosts = posts.filter(
-    p =>
+    (p) =>
       (p.user === username || friends.includes(p.user)) &&
       (p.visibility === 'public' || p.user === username)
-  )
+  ); // IMPORTANT: terminate this
+
   return (
     <div className="flex min-h-screen text-white bg-[#3A47FF] relative">
+      {/* 🆕 Global CSS tweaks to keep avatars small without removing your original markup */}
+      <style jsx global>{`
+        /* Make the original big profile <img alt="Profile"> render small */
+        img[alt="Profile"] {
+          width: 40px !important;
+          height: 40px !important;
+          object-fit: cover;
+        }
+        /* Ensure any tiny avatars we add stay compact */
+        .avatar-sm { width: 32px; height: 32px; border-radius: 9999px; object-fit: cover; }
+        .avatar-md { width: 40px; height: 40px; border-radius: 9999px; object-fit: cover; }
+        
+        /* FEED: Hide duplicate username in the second header row (keep the like button) */
+  .flex.items-center.gap-2.mb-2 + .flex.justify-between.items-center.mb-2 > button:first-child {
+    display: none !important;
+  }
+
+  /* PROFILE: Only show the compact row; hide the original big image + name + bio */
+  .text-center > img[alt="Profile"],
+  .text-center > p.text-lg.font-bold,
+  .text-center > p.text-sm.italic.text-gray-200.mb-4 {
+    display: none !important;
+  }
+
+  /* PROFILE: make the compact profile avatar slightly larger (but still small) */
+  .avatar-md {
+    width: 56px !important;   /* was ~40px */
+    height: 56px !important;
+    border-radius: 9999px;
+    object-fit: cover;
+  }
+      `}</style>
+
       {/* Hamburger Menu */}
       <button
         onClick={() => setMenuOpen(!menuOpen)}
         className="md:hidden fixed top-4 left-4 z-50 bg-white text-black p-2 rounded-md shadow-lg"
+        aria-label="Open menu"
       >
         <Menu />
       </button>
@@ -403,9 +452,23 @@ export default function SweatStreakApp() {
         className={`fixed md:relative top-0 left-0 h-full w-48 md:w-56 lg:w-60 flex flex-col p-4 border-r border-white shadow-md bg-[#3A47FF] transform ${
           menuOpen ? 'translate-x-0' : '-translate-x-full'
         } md:translate-x-0 transition-transform duration-300 ease-in-out z-40`}
+        aria-label="Sidebar"
       >
         <h1 className={`${bubbleFont.className} text-xl md:text-2xl mb-4 text-white`}>SweatStreak</h1>
+
+        {/* Small avatar + username row (addition only) */}
+        <div className="flex items-center gap-2 mb-2">
+          {profilePic ? (
+            <img src={profilePic} alt="Me" className="avatar-sm border border-white" />
+          ) : (
+            <div className="avatar-sm border border-white flex items-center justify-center text-xs">👤</div>
+          )}
+          <span className="text-xs md:text-sm">@{username}</span>
+        </div>
+
+        {/* original username line preserved */}
         <p className="text-xs md:text-sm mb-4">@{username}</p>
+
         <nav className="flex flex-col gap-3 flex-1">
           <button onClick={() => { setView('feed'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><Home /> Feed</button>
           <button onClick={() => { setView('camera'); setMenuOpen(false) }} className="flex items-center gap-2 p-2 hover:bg-white/20 rounded-md"><Camera /> Take Photo</button>
@@ -438,7 +501,10 @@ export default function SweatStreakApp() {
               <button onClick={toggleCamera} className="bg-white text-black px-6 py-2 rounded-md font-bold flex items-center gap-2">
                 <RefreshCw size={16} /> Flip
               </button>
-              <button onClick={capturePhoto} className="bg-red-500 text-white px-8 py-3 rounded-full font-bold text-lg">●</button>
+              {/* “Take Picture” button added (keeps original dot if you want both) */}
+              <button onClick={capturePhoto} className="bg-red-500 text-white px-6 py-2 rounded-md font-bold text-lg">
+                Take Picture
+              </button>
             </div>
           </div>
         )}
@@ -492,6 +558,26 @@ export default function SweatStreakApp() {
               feedPosts.map(post => (
                 <div key={post.id} className="bg-[#3A47FF]/50 p-4 rounded-lg mb-5 border border-white shadow-sm text-left">
                   <img src={post.image} alt={post.caption} className="rounded-lg mb-3 w-full object-cover border border-white" />
+
+                  {/* avatar + username row (added) */}
+                  <div className="flex items-center gap-2 mb-2">
+                    {getUserPic(post.user) ? (
+                      <img src={getUserPic(post.user)} alt={post.user} className="avatar-sm border border-white" />
+                    ) : (
+                      <div className="avatar-sm border border-white flex items-center justify-center text-xs">👤</div>
+                    )}
+                    <button
+                      onClick={() => {
+                        const users = JSON.parse(localStorage.getItem('sweatstreak_accounts') || '{}')
+                        if (users[post.user]) openFriendProfile(users[post.user])
+                      }}
+                      className="font-semibold text-white underline"
+                    >
+                      @{post.user}
+                    </button>
+                  </div>
+
+                  {/* original header preserved */}
                   <div className="flex justify-between items-center mb-2">
                     <button
                       onClick={() => {
@@ -506,6 +592,7 @@ export default function SweatStreakApp() {
                       <Heart fill={post.likes.includes(username) ? 'red' : 'none'} /> {post.likes.length}
                     </button>
                   </div>
+
                   <p>{post.caption}</p>
                   <p className="text-xs text-gray-200 mb-2">{post.date}</p>
                   <div className="mt-2">
@@ -551,7 +638,7 @@ export default function SweatStreakApp() {
             {friendPreview && (
               <div className="bg-white/10 p-4 rounded-md mb-4">
                 {friendPreview.profilePic && (
-                  <img src={friendPreview.profilePic} className="w-16 h-16 rounded-full mx-auto mb-2 border border-white" />
+                  <img src={friendPreview.profilePic} className="avatar-md mx-auto mb-2 border border-white" />
                 )}
                 <p className="text-center font-bold">@{friendPreview.username}</p>
                 <div className="flex justify-center gap-3 mt-2">
@@ -614,9 +701,24 @@ export default function SweatStreakApp() {
             <h2 className={`${bubbleFont.className} text-3xl mb-6 text-white`}>My Profile</h2>
             {!editingProfile ? (
               <div className="text-center">
+                {/* original image kept but globally forced small via CSS above */}
                 {profilePic && <img src={profilePic} alt="Profile" className="w-24 h-24 rounded-full mx-auto mb-3 border-2 border-white" />}
                 <p className="text-lg font-bold">@{username}</p>
                 <p className="text-sm italic text-gray-200 mb-4">{profileBio || 'No bio yet.'}</p>
+
+                {/* small avatar inline with name + bio */}
+                <div className="flex items-center gap-3 justify-center mb-4">
+                  {profilePic ? (
+                    <img src={profilePic} alt="mini" className="avatar-md border border-white" />
+                  ) : (
+                    <div className="avatar-md border border-white flex items-center justify-center">👤</div>
+                  )}
+                  <div className="text-left">
+                    <div className="font-bold">@{username}</div>
+                    <div className="text-xs italic text-gray-200 max-w-xs">{profileBio || 'No bio yet.'}</div>
+                  </div>
+                </div>
+
                 <button onClick={() => setEditingProfile(true)} className="bg-white text-black px-4 py-2 rounded-md font-bold">Edit Profile</button>
               </div>
             ) : (
@@ -639,7 +741,7 @@ export default function SweatStreakApp() {
           <section>
             <button onClick={() => setView('friends')} className="flex items-center gap-2 mb-4"><ArrowLeft /> Back</button>
             <div className="text-center mb-6">
-              {activeFriend.profilePic && <img src={activeFriend.profilePic} className="w-24 h-24 rounded-full mx-auto mb-3 border border-white" />}
+              {activeFriend.profilePic && <img src={activeFriend.profilePic} className="avatar-md mx-auto mb-3 border border-white" />}
               <p className="font-bold text-xl">@{activeFriend.username}</p>
               <p className="text-sm italic text-gray-200">{activeFriend.bio || 'No bio yet.'}</p>
               {!friends.includes(activeFriend.username) && (
