@@ -5,15 +5,14 @@ workflows:
     instance_type: mac_mini_m1
 
     # Pull secrets/vars from the "ios" group (set these in Codemagic → Environment variables)
-    # Required in group "ios":
-    #   APP_STORE_CONNECT_PRIVATE_KEY   (base64 of your .p8 contents)
-    #   APP_STORE_CONNECT_KEY_ID        (your App Store Connect Key ID)
+    #   APP_STORE_CONNECT_PRIVATE_KEY (base64 of .p8)
+    #   APP_STORE_CONNECT_KEY_ID
     #   APP_STORE_CONNECT_ISSUER_ID
-    #   CM_EMAIL                        (where build results will be emailed)
+    #   CM_EMAIL
     #   NEXT_PUBLIC_SUPABASE_URL
     #   NEXT_PUBLIC_SUPABASE_ANON_KEY
-    #   APPLE_TEAM_ID                   (10-char Apple Developer Team ID)
-    #   BUNDLE_ID                       (e.g. com.cedricroberge.sweatstreak)
+    #   APPLE_TEAM_ID
+    #   BUNDLE_ID
     environment:
       groups:
         - ios
@@ -37,7 +36,7 @@ workflows:
       - name: Build Next.js app (static export) & sync Capacitor
         script: |
           npm install -g @capacitor/cli
-          npm run build              # uses next.config.mjs to export to ./out
+          npm run build
           npx cap sync ios
 
       - name: Install CocoaPods
@@ -45,79 +44,35 @@ workflows:
           cd ios/App
           pod install --repo-update
 
-      # === Automatic signing: fetch provisioning profile & certs from App Store Connect,
-      #     install them into a temp keychain, and map profiles to the Xcode project.
       - name: Set up automatic signing
         script: |
-          # Codemagic CLI expects APP_STORE_CONNECT_KEY_IDENTIFIER;
-          # we alias it from your existing APP_STORE_CONNECT_KEY_ID.
           export APP_STORE_CONNECT_KEY_IDENTIFIER="$APP_STORE_CONNECT_KEY_ID"
-
-          # Create a temporary keychain for signing
           keychain initialize
-
-          # Fetch or create signing files for the bundle id (App Store profile + Distribution cert)
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --create
-
-          # Install downloaded certificates into the temporary keychain
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
-
-          # Apply provisioning profiles to the Xcode project
           xcode-project use-profiles --project ios/App/App.xcodeproj
 
-      - name: Archive iOS app
+      - name: Build & sign IPA (App Store)
         script: |
-          cd ios/App
-          xcodebuild \
-            -workspace App.xcworkspace \
-            -scheme App \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath "$CM_BUILD_DIR/ios_archive.xcarchive" \
-            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
-            CODE_SIGN_STYLE=Automatic \
-            -allowProvisioningUpdates \
-            clean archive
-
-      - name: Export IPA
-        script: |
-          # Minimal ExportOptions for App Store/TestFlight
-          cat > "$CM_BUILD_DIR/ExportOptions.plist" <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>app-store</string>
-            <key>uploadSymbols</key><true/>
-            <key>compileBitcode</key><false/>
-          </dict>
-          </plist>
-          PLIST
-
-          cd ios/App
-          xcodebuild \
-            -exportArchive \
-            -archivePath "$CM_BUILD_DIR/ios_archive.xcarchive" \
-            -exportOptionsPlist "$CM_BUILD_DIR/ExportOptions.plist" \
-            -exportPath "$CM_BUILD_DIR/ios_build" \
-            -allowProvisioningUpdates
+          xcode-project build-ipa \
+            --workspace ios/App/App.xcworkspace \
+            --scheme App \
+            --archive-configuration Release \
+            --export-method app-store \
+            --archive-flags "DEVELOPMENT_TEAM=$APPLE_TEAM_ID PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID CODE_SIGN_STYLE=Manual"
 
     artifacts:
       - $CM_BUILD_DIR/ios_build/*.ipa
+      - $CM_BUILD_DIR/**/*.ipa
       - $CM_BUILD_DIR/ios_archive.xcarchive
 
     publishing:
-      # Upload to App Store Connect / TestFlight using API key
       app_store_connect:
         api_key: $APP_STORE_CONNECT_PRIVATE_KEY
         key_id: $APP_STORE_CONNECT_KEY_ID
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
         submit_to_testflight: true
 
-      # Email the build result
       email:
         recipients:
           - $CM_EMAIL
