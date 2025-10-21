@@ -4,38 +4,46 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m1
 
+    # Pull secrets/vars from the "ios" group (set these in Codemagic → Environment variables)
+    # Required in group "ios":
+    #   APP_STORE_CONNECT_PRIVATE_KEY   (base64 of your .p8 contents)
+    #   APP_STORE_CONNECT_KEY_ID
+    #   APP_STORE_CONNECT_ISSUER_ID
+    #   CM_EMAIL                        (where build results will be emailed)
+    #   NEXT_PUBLIC_SUPABASE_URL
+    #   NEXT_PUBLIC_SUPABASE_ANON_KEY
     environment:
+      groups:
+        - ios
       vars:
         NODE_VERSION: 20
         XCODE_VERSION: 15.0
 
-    # ---- INPUTS (bridge env vars -> YAML-safe references) ----
-    inputs:
-      APP_STORE_CONNECT_PRIVATE_KEY:
-        description: Apple API key (.p8) Base64 (from env var)
-        default: ${APP_STORE_CONNECT_PRIVATE_KEY}
-      APP_STORE_CONNECT_KEY_ID:
-        description: Apple Key ID (from env var)
-        default: ${APP_STORE_CONNECT_KEY_ID}
-      APP_STORE_CONNECT_ISSUER_ID:
-        description: Apple Issuer ID (from env var)
-        default: ${APP_STORE_CONNECT_ISSUER_ID}
-      CM_EMAIL:
-        description: Email to receive build notifications
-        default: ${CM_EMAIL}
+    cache:
+      cache_paths:
+        - ~/.npm
+        - $HOME/Library/Caches/CocoaPods
+        - ios/**/Pods
 
     scripts:
       - name: Install dependencies
         script: |
+          node -v
+          npm -v
           npm ci
 
-      - name: Build Next.js app and sync Capacitor iOS
+      - name: Build Next.js app (static export) & sync Capacitor
         script: |
           npm install -g @capacitor/cli
-          npm run build
+          npm run build              # uses next.config.mjs to export to ./out
           npx cap sync ios
 
-      - name: Archive iOS app (xcodebuild)
+      - name: Install CocoaPods
+        script: |
+          cd ios/App
+          pod install --repo-update
+
+      - name: Archive iOS app
         script: |
           cd ios/App
           xcodebuild \
@@ -43,45 +51,45 @@ workflows:
             -scheme App \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath "$CM_BUILD_DIR/ios_archive" \
+            -archivePath "$CM_BUILD_DIR/ios_archive.xcarchive" \
             clean archive
 
       - name: Export IPA
         script: |
-          cat > "$CM_BUILD_DIR/ExportOptions.plist" << 'EOF'
+          # Minimal ExportOptions for App Store/TestFlight
+          cat > "$CM_BUILD_DIR/ExportOptions.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-            <key>method</key>
-            <string>app-store</string>
-            <key>uploadBitcode</key>
-            <false/>
-            <key>uploadSymbols</key>
-            <true/>
-            <key>compileBitcode</key>
-            <false/>
+            <key>method</key><string>app-store</string>
+            <key>uploadSymbols</key><true/>
+            <key>compileBitcode</key><false/>
           </dict>
           </plist>
-          EOF
+          PLIST
 
-          xcodebuild -exportArchive \
+          cd ios/App
+          xcodebuild \
+            -exportArchive \
             -archivePath "$CM_BUILD_DIR/ios_archive.xcarchive" \
+            -exportOptionsPlist "$CM_BUILD_DIR/ExportOptions.plist" \
             -exportPath "$CM_BUILD_DIR/ios_build" \
-            -exportOptionsPlist "$CM_BUILD_DIR/ExportOptions.plist" | xcpretty
+            -allowProvisioningUpdates
 
     artifacts:
       - $CM_BUILD_DIR/ios_build/*.ipa
       - $CM_BUILD_DIR/ios_archive.xcarchive
 
     publishing:
+      # Upload to App Store Connect / TestFlight using API key
       app_store_connect:
-        # auth inferred from fields below; no 'auth:' line needed
-        api_key: ${{ inputs.APP_STORE_CONNECT_PRIVATE_KEY }}
-        key_id: ${{ inputs.APP_STORE_CONNECT_KEY_ID }}
-        issuer_id: ${{ inputs.APP_STORE_CONNECT_ISSUER_ID }}
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_ID
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
         submit_to_testflight: true
 
+      # Email the build result
       email:
         recipients:
-          - ${{ inputs.CM_EMAIL }}
+          - $CM_EMAIL
