@@ -7,7 +7,7 @@ workflows:
     # Pull secrets/vars from the "ios" group (set these in Codemagic → Environment variables)
     # Required in group "ios":
     #   APP_STORE_CONNECT_PRIVATE_KEY   (base64 of your .p8 contents)
-    #   APP_STORE_CONNECT_KEY_ID
+    #   APP_STORE_CONNECT_KEY_ID        (your App Store Connect Key ID)
     #   APP_STORE_CONNECT_ISSUER_ID
     #   CM_EMAIL                        (where build results will be emailed)
     #   NEXT_PUBLIC_SUPABASE_URL
@@ -44,6 +44,28 @@ workflows:
         script: |
           cd ios/App
           pod install --repo-update
+
+      # === Automatic signing: fetch provisioning profile & certs from App Store Connect,
+      #     install them into a temp keychain, and map profiles to the Xcode project.
+      - name: Set up automatic signing
+        script: |
+          # Codemagic CLI expects APP_STORE_CONNECT_KEY_IDENTIFIER;
+          # we alias it from your existing APP_STORE_CONNECT_KEY_ID.
+          export APP_STORE_CONNECT_KEY_IDENTIFIER="$APP_STORE_CONNECT_KEY_ID"
+
+          # Create a temporary keychain for signing
+          keychain initialize
+
+          # Fetch or create signing files for the bundle id (App Store profile + Distribution cert)
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+
+          # Install downloaded certificates into the temporary keychain
+          keychain add-certificates
+
+          # Apply provisioning profiles to the Xcode project
+          xcode-project use-profiles --project ios/App/App.xcodeproj
 
       - name: Archive iOS app
         script: |
