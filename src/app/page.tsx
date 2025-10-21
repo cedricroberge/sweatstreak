@@ -21,6 +21,9 @@ import {
 } from 'lucide-react'
 import { Bungee } from 'next/font/google'
 
+// 🆕 Supabase storage helpers
+import { uploadPostImageFromDataUrl, createPost, uploadAvatar } from '../lib/storage'
+
 const bubbleFont = Bungee({ subsets: ['latin'], weight: '400' })
 
 // ✅ Type definitions
@@ -238,7 +241,8 @@ export default function SweatStreakApp() {
     }
   }
 
-  function confirmPhoto(): void {
+  // 🆕 NOW uploads to Supabase, then still updates the local feed for instant UX
+  async function confirmPhoto(): Promise<void> {
     if (!preview) return
     const hasPostedToday = posts.some(p => p.user === username && p.date === todayISO)
     if (hasPostedToday) {
@@ -248,44 +252,57 @@ export default function SweatStreakApp() {
       setView('feed')
       return
     }
-    const newPost: Post = {
-      id: Date.now(),
-      user: username,
-      image: preview,
-      caption: caption || "Just finished today's workout 💪",
-      date: todayISO,
-      likes: [],
-      comments: [],
-      visibility
-    }
-    const updated = [newPost, ...posts]
-    savePosts(updated)
 
-    // Notify followers that I posted
-    const followers = getFollowers(username)
-    const users = getAccounts()
-    followers.forEach(f => {
-      const followerSettings = users[f]
-      if (followerSettings?.notificationsEnabled !== false) {
-        const n: string[] = JSON.parse(localStorage.getItem(`notifications_${f}`) || '[]')
-        n.push(`${username} just posted their SweatStreak! 🔥`)
-        localStorage.setItem(`notifications_${f}`, JSON.stringify(n))
+    try {
+      // 1) upload the image to Supabase Storage (posts bucket)
+      const imageUrl = await uploadPostImageFromDataUrl(preview)
+
+      // 2) create the post row in Supabase (keeps server truth)
+      await createPost({ imageUrl, caption: caption || "Just finished today's workout 💪", visibility })
+
+      // 3) still update your local UI immediately (keeps your current UX)
+      const newPost: Post = {
+        id: Date.now(),
+        user: username,
+        image: imageUrl,           // use storage URL now
+        caption: caption || "Just finished today's workout 💪",
+        date: todayISO,
+        likes: [],
+        comments: [],
+        visibility
       }
-    })
+      const updated = [newPost, ...posts]
+      savePosts(updated)
 
-    // keep legacy friend notifications
-    if (visibility === 'public') {
-      friends.forEach(friend => {
-        const friendNotifications: string[] = JSON.parse(localStorage.getItem(`notifications_${friend}`) || '[]')
-        friendNotifications.push(`${username} just posted their SweatStreak! 🔥`)
-        localStorage.setItem(`notifications_${friend}`, JSON.stringify(friendNotifications))
+      // Notify followers that I posted
+      const followers = getFollowers(username)
+      const users = getAccounts()
+      followers.forEach(f => {
+        const followerSettings = users[f]
+        if (followerSettings?.notificationsEnabled !== false) {
+          const n: string[] = JSON.parse(localStorage.getItem(`notifications_${f}`) || '[]')
+          n.push(`${username} just posted their SweatStreak! 🔥`)
+          localStorage.setItem(`notifications_${f}`, JSON.stringify(n))
+        }
       })
-    }
 
-    setPreview(null)
-    setCaption('')
-    setShowCamera(false)
-    setView('feed')
+      // keep legacy friend notifications
+      if (visibility === 'public') {
+        friends.forEach(friend => {
+          const friendNotifications: string[] = JSON.parse(localStorage.getItem(`notifications_${friend}`) || '[]')
+          friendNotifications.push(`${username} just posted their SweatStreak! 🔥`)
+          localStorage.setItem(`notifications_${friend}`, JSON.stringify(friendNotifications))
+        })
+      }
+
+      setPreview(null)
+      setCaption('')
+      setShowCamera(false)
+      setView('feed')
+    } catch (err: any) {
+      console.error(err)
+      alert(`Upload failed: ${err?.message || err}`)
+    }
   }
 
   // --- FRIENDS (legacy kept) + FOLLOWING (new) ---
@@ -356,12 +373,28 @@ export default function SweatStreakApp() {
     }
   }
 
-  function handleProfilePicChange(e: React.ChangeEvent<HTMLInputElement>) {
+  // 🆕 Upload avatar to Supabase and save the returned URL
+  async function handleProfilePicChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    const reader = new FileReader()
-    reader.onloadend = () => setProfilePic(reader.result as string)
-    reader.readAsDataURL(file)
+    try {
+      const url = await uploadAvatar(file)
+      setProfilePic(url)
+
+      // also persist to local accounts object so your current UI sees it immediately
+      const users = getAccounts()
+      if (users[username]) {
+        users[username].profilePic = url
+        setAccounts(users)
+      }
+    } catch (err: any) {
+      console.error(err)
+      // graceful fallback: still preview locally
+      const reader = new FileReader()
+      reader.onloadend = () => setProfilePic(reader.result as string)
+      reader.readAsDataURL(file)
+      alert(`Avatar upload failed, showing local preview instead.\n${err?.message || err}`)
+    }
   }
 
   // --- NOTIFICATIONS ---
