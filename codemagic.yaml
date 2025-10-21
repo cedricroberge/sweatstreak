@@ -4,15 +4,15 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m1
 
-    # Environment variables in Codemagic (group "ios"):
-    #   APP_STORE_CONNECT_PRIVATE_KEY (base64 of .p8)
+    # Env group "ios" should contain:
     #   APP_STORE_CONNECT_KEY_ID
     #   APP_STORE_CONNECT_ISSUER_ID
+    #   APP_STORE_CONNECT_PRIVATE_KEY_B64   # <-- base64 of the .p8 contents
     #   CM_EMAIL
     #   NEXT_PUBLIC_SUPABASE_URL
     #   NEXT_PUBLIC_SUPABASE_ANON_KEY
-    #   APPLE_TEAM_ID                  (10-char Team ID)
-    #   BUNDLE_ID                      (e.g. com.cedricroberge.sweatstreak)
+    #   APPLE_TEAM_ID                       # 10-char Team ID
+    #   BUNDLE_ID                           # e.g. com.cedricroberge.sweatstreak
     environment:
       groups:
         - ios
@@ -36,7 +36,7 @@ workflows:
       - name: Build Next.js app (static export) & sync Capacitor
         script: |
           npm install -g @capacitor/cli
-          npm run build
+          npm run build              # uses next.config.mjs to export to ./out
           npx cap sync ios
 
       - name: Install CocoaPods
@@ -44,18 +44,38 @@ workflows:
           cd ios/App
           pod install --repo-update
 
-      # Prepare keychain and let Xcode do Automatic signing using your Team ID.
-      # We still fetch signing files so TestFlight upload has everything it needs.
+      # 🔑 Decode your base64 .p8 to PEM and fetch signing files automatically
       - name: Prepare signing (keychain + API key)
         script: |
+          set -e
           export APP_STORE_CONNECT_KEY_IDENTIFIER="$APP_STORE_CONNECT_KEY_ID"
+
+          # Create/initialize Codemagic keychain
           keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+
+          # Decode the base64 AuthKey to a real PEM file
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY_B64" | base64 --decode > /tmp/AuthKey.p8
+
+          # OPTIONAL: show that file exists (size only, keep contents secret)
+          ls -l /tmp/AuthKey.p8
+
+          # Fetch (or create) certs + provisioning profiles for distribution
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --key-id "$APP_STORE_CONNECT_KEY_ID" \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --private-key @/tmp/AuthKey.p8 \
+            --create
+
+          # Import downloaded certificates to keychain
           keychain add-certificates
+
+          # Export decoded PEM so the publishing step can use it
+          export APP_STORE_CONNECT_PRIVATE_KEY="$(cat /tmp/AuthKey.p8)"
 
       - name: Build & sign IPA (App Store)
         script: |
-          # Automatic signing: Xcode will attach the right managed profile for your Team
+          # Use Automatic signing so Xcode attaches the correct managed profile
           xcode-project build-ipa \
             --workspace ios/App/App.xcworkspace \
             --scheme App \
@@ -69,6 +89,7 @@ workflows:
 
     publishing:
       app_store_connect:
+        # Uses the decoded PEM we exported in the Prepare signing step
         api_key: $APP_STORE_CONNECT_PRIVATE_KEY
         key_id: $APP_STORE_CONNECT_KEY_ID
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
