@@ -4,15 +4,15 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m1
 
-    # Pull secrets/vars from the "ios" group (set these in Codemagic → Environment variables)
-    #   APP_STORE_CONNECT_PRIVATE_KEY (base64 of .p8)
+    # Environment variables (set in Codemagic → Environment variables, group "ios")
+    #   APP_STORE_CONNECT_PRIVATE_KEY   (base64 of .p8)
     #   APP_STORE_CONNECT_KEY_ID
     #   APP_STORE_CONNECT_ISSUER_ID
     #   CM_EMAIL
     #   NEXT_PUBLIC_SUPABASE_URL
     #   NEXT_PUBLIC_SUPABASE_ANON_KEY
-    #   APPLE_TEAM_ID
-    #   BUNDLE_ID
+    #   APPLE_TEAM_ID                   (10-char team ID)
+    #   BUNDLE_ID                       (e.g. com.cedricroberge.sweatstreak)
     environment:
       groups:
         - ios
@@ -36,7 +36,7 @@ workflows:
       - name: Build Next.js app (static export) & sync Capacitor
         script: |
           npm install -g @capacitor/cli
-          npm run build
+          npm run build        # exports to ./out (via next.config.mjs)
           npx cap sync ios
 
       - name: Install CocoaPods
@@ -44,21 +44,26 @@ workflows:
           cd ios/App
           pod install --repo-update
 
-      - name: Set up automatic signing
+      - name: Set up automatic signing (fetch provisioning, apply profiles)
         script: |
+          # map Codemagic’s expected env var name
           export APP_STORE_CONNECT_KEY_IDENTIFIER="$APP_STORE_CONNECT_KEY_ID"
+
+          # Prepare keychain, fetch store profiles/certs for App Store method
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
           keychain add-certificates
+
+          # Apply profiles to the Xcode project
           xcode-project use-profiles --project ios/App/App.xcodeproj
 
       - name: Build & sign IPA (App Store)
         script: |
+          # Use 'xcode-project build-ipa' with supported flags
           xcode-project build-ipa \
             --workspace ios/App/App.xcworkspace \
             --scheme App \
-            --archive-configuration Release \
-            --export-method app-store \
+            --config Release \
             --archive-flags "DEVELOPMENT_TEAM=$APPLE_TEAM_ID PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID CODE_SIGN_STYLE=Manual"
 
     artifacts:
