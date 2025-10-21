@@ -1,16 +1,17 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true, // ✅ Allow builds even if ESLint errors exist
-  },
-  typescript: {
-    ignoreBuildErrors: true, // ✅ Allow builds even if TS errors exist
-  },
-  output: 'export', // ✅ Enables static site export (replaces `npx next export`)
-  images: {
-    unoptimized: true, // ✅ Prevents Next.js image optimization issues
-  },
-  reactStrictMode: true, // Optional, but safe to keep
-}
+  // Avoid failing builds due to lint or TS in CI
+  eslint: { ignoreDuringBuilds: true },
+  typescript: { ignoreBuildErrors: true },
+
+  // Produce a static site in ./out (needed for Capacitor)
+  output: 'export',
+
+  // Disable Next/Image optimizer (works with static export)
+  images: { unoptimized: true },
+
+  // Optional but fine to keep
+  reactStrictMode: true,
+};
 
 module.exports = nextConfig;
