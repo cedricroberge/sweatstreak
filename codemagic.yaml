@@ -12,6 +12,8 @@ workflows:
     #   CM_EMAIL                        (where build results will be emailed)
     #   NEXT_PUBLIC_SUPABASE_URL
     #   NEXT_PUBLIC_SUPABASE_ANON_KEY
+    #   APPLE_TEAM_ID                   (10-char Apple Developer Team ID)
+    #   BUNDLE_ID                       (e.g. com.cedricroberge.sweatstreak)
     environment:
       groups:
         - ios
@@ -52,6 +54,10 @@ workflows:
             -configuration Release \
             -sdk iphoneos \
             -archivePath "$CM_BUILD_DIR/ios_archive.xcarchive" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            -allowProvisioningUpdates \
             clean archive
 
       - name: Export IPA
